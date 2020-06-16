@@ -54,6 +54,31 @@ func (c templateContext) OriginalReq() http.Request {
 	return or
 }
 
+// CustomContext Public context to cast for custo m functions
+type CustomContext struct {
+	templateContext
+}
+
+// CustomFuncs returns the result of user defined template functions
+var CustomFuncs = make(map[string]func(CustomContext) string)
+var customFuncsMutex = sync.RWMutex{}
+
+// RegisterCustomFunc Register a new custom function
+func RegisterCustomFunc(name string, f func(CustomContext) string) {
+	customFuncsMutex.Lock()
+	defer customFuncsMutex.Unlock()
+	CustomFuncs[name] = f
+}
+func (c templateContext) funcCustom(name string) string {
+	customFuncsMutex.RLock()
+	defer customFuncsMutex.RUnlock()
+	f, ok := CustomFuncs[name]
+	if ok {
+		return f(CustomContext{c})
+	}
+	return ""
+}
+
 // funcInclude returns the contents of filename relative to the site root.
 // Note that included files are NOT escaped, so you should only include
 // trusted files. If it is not trusted, be sure to use escaping functions
@@ -152,6 +177,7 @@ func (c templateContext) executeTemplateInBuffer(tplName string, buf *bytes.Buff
 		"splitFrontMatter": c.funcSplitFrontMatter,
 		"listFiles":        c.funcListFiles,
 		"env":              c.funcEnv,
+		"custom":           c.funcCustom,
 	})
 
 	parsedTpl, err := tpl.Parse(buf.String())
