@@ -561,7 +561,9 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 		} else if commonScheme == "https" {
 			return d.Errf("upstreams are configured for HTTPS but transport module does not support TLS: %T", transport)
 		}
-		if !reflect.DeepEqual(transport, reflect.New(reflect.TypeOf(transport).Elem()).Interface()) {
+
+		// no need to encode empty default transport
+		if !reflect.DeepEqual(transport, new(HTTPTransport)) {
 			h.TransportRaw = caddyconfig.JSONModuleObject(transport, "protocol", transportModuleName, nil)
 		}
 	}
@@ -715,6 +717,14 @@ func (h *HTTPTransport) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				h.Versions = d.RemainingArgs()
 				if len(h.Versions) == 0 {
 					return d.ArgErr()
+				}
+
+			case "compression":
+				if d.NextArg() {
+					if d.Val() == "off" {
+						var disable bool
+						h.Compression = &disable
+					}
 				}
 
 			default:

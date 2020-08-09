@@ -15,6 +15,7 @@
 package caddyhttp
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -25,6 +26,8 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/textproto"
@@ -136,6 +139,24 @@ func addHTTPVarsToReplacer(repl *caddy.Replacer, req *http.Request, w http.Respo
 				return dir, true
 			case "http.request.uri.query":
 				return req.URL.RawQuery, true
+			case "http.request.body":
+				if req.Body == nil {
+					return "", true
+				}
+				// normally net/http will close the body for us, but since we
+				// are replacing it with a fake one, we have to ensure we close
+				// the real body ourselves when we're done
+				defer req.Body.Close()
+				// read the request body into a buffer (can't pool because we
+				// don't know its lifetime and would have to make a copy anyway)
+				buf := new(bytes.Buffer)
+				_, err := io.Copy(buf, req.Body)
+				if err != nil {
+					return "", true
+				}
+				// replace real body with buffered data
+				req.Body = ioutil.NopCloser(buf)
+				return buf.String(), true
 
 				// original request, before any internal changes
 			case "http.request.orig_method":
@@ -172,7 +193,7 @@ func addHTTPVarsToReplacer(repl *caddy.Replacer, req *http.Request, w http.Respo
 					reqHost = req.Host // OK; assume there was no port
 				}
 				hostLabels := strings.Split(reqHost, ".")
-				if idx > len(hostLabels) {
+				if idx >= len(hostLabels) {
 					return "", true
 				}
 				return hostLabels[len(hostLabels)-idx-1], true

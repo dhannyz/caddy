@@ -87,6 +87,7 @@ func (t *TLS) Provision(ctx caddy.Context) error {
 		GetConfigForCert: func(cert certmagic.Certificate) (*certmagic.Config, error) {
 			return t.getConfigForName(cert.Names[0]), nil
 		},
+		Logger: t.logger.Named("cache"),
 	}
 	if t.Automation != nil {
 		cacheOpts.OCSPCheckInterval = time.Duration(t.Automation.OCSPCheckInterval)
@@ -94,6 +95,9 @@ func (t *TLS) Provision(ctx caddy.Context) error {
 	}
 	if t.Cache != nil {
 		cacheOpts.Capacity = t.Cache.Capacity
+	}
+	if cacheOpts.Capacity <= 0 {
+		cacheOpts.Capacity = 10000
 	}
 	t.certCache = certmagic.NewCache(cacheOpts)
 
@@ -172,6 +176,7 @@ func (t *TLS) Provision(ctx caddy.Context) error {
 	// commands like validate can be a better test
 	magic := certmagic.New(t.certCache, certmagic.Config{
 		Storage: ctx.Storage(),
+		Logger:  t.logger,
 	})
 	for _, loader := range t.certificateLoaders {
 		certs, err := loader.LoadCertificates()
@@ -373,9 +378,9 @@ func (t *TLS) AllMatchingCertificates(san string) []certmagic.Certificate {
 	return t.certCache.AllMatchingCertificates(san)
 }
 
-// keepStorageClean immediately cleans up all known storage units
-// if it was not recently done, and starts a goroutine that runs
-// the operation at every tick from t.storageCleanTicker.
+// keepStorageClean starts a goroutine that immediately cleans up all
+// known storage units if it was not recently done, and then runs the
+// operation at every tick from t.storageCleanTicker.
 func (t *TLS) keepStorageClean() {
 	t.storageCleanTicker = time.NewTicker(storageCleanInterval)
 	t.storageCleanStop = make(chan struct{})
@@ -385,6 +390,7 @@ func (t *TLS) keepStorageClean() {
 				log.Printf("[PANIC] storage cleaner: %v\n%s", err, debug.Stack())
 			}
 		}()
+		t.cleanStorageUnits()
 		for {
 			select {
 			case <-t.storageCleanStop:
@@ -394,7 +400,6 @@ func (t *TLS) keepStorageClean() {
 			}
 		}
 	}()
-	t.cleanStorageUnits()
 }
 
 func (t *TLS) cleanStorageUnits() {
@@ -412,13 +417,13 @@ func (t *TLS) cleanStorageUnits() {
 	}
 
 	// start with the default storage
-	certmagic.CleanStorage(t.ctx.Storage(), options)
+	certmagic.CleanStorage(t.ctx, t.ctx.Storage(), options)
 
 	// then clean each storage defined in ACME automation policies
 	if t.Automation != nil {
 		for _, ap := range t.Automation.Policies {
 			if ap.storage != nil {
-				certmagic.CleanStorage(ap.storage, options)
+				certmagic.CleanStorage(t.ctx, ap.storage, options)
 			}
 		}
 	}

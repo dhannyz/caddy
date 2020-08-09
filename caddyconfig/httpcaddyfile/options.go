@@ -20,6 +20,7 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddytls"
+	"github.com/mholt/acmez/acme"
 )
 
 func init() {
@@ -182,7 +183,7 @@ func parseOptStorage(d *caddyfile.Dispenser) (interface{}, error) {
 }
 
 func parseOptACMEEAB(d *caddyfile.Dispenser) (interface{}, error) {
-	eab := new(caddytls.ExternalAccountBinding)
+	eab := new(acme.EAB)
 	for d.Next() {
 		if d.NextArg() {
 			return nil, d.ArgErr()
@@ -195,11 +196,11 @@ func parseOptACMEEAB(d *caddyfile.Dispenser) (interface{}, error) {
 				}
 				eab.KeyID = d.Val()
 
-			case "hmac":
+			case "mac_key":
 				if !d.NextArg() {
 					return nil, d.ArgErr()
 				}
-				eab.HMAC = d.Val()
+				eab.MACKey = d.Val()
 
 			default:
 				return nil, d.Errf("unrecognized parameter '%s'", d.Val())
@@ -222,17 +223,39 @@ func parseOptSingleString(d *caddyfile.Dispenser) (interface{}, error) {
 }
 
 func parseOptAdmin(d *caddyfile.Dispenser) (interface{}, error) {
-	if d.Next() {
-		var listenAddress string
-		if !d.AllArgs(&listenAddress) {
-			return "", d.ArgErr()
+	adminCfg := new(caddy.AdminConfig)
+	for d.Next() {
+		if d.NextArg() {
+			listenAddress := d.Val()
+			if listenAddress == "off" {
+				adminCfg.Disabled = true
+				if d.Next() { // Do not accept any remaining options including block
+					return nil, d.Err("No more option is allowed after turning off admin config")
+				}
+			} else {
+				adminCfg.Listen = listenAddress
+				if d.NextArg() { // At most 1 arg is allowed
+					return nil, d.ArgErr()
+				}
+			}
 		}
-		if listenAddress == "" {
-			listenAddress = caddy.DefaultAdminListen
+		for nesting := d.Nesting(); d.NextBlock(nesting); {
+			switch d.Val() {
+			case "enforce_origin":
+				adminCfg.EnforceOrigin = true
+
+			case "origins":
+				adminCfg.Origins = d.RemainingArgs()
+
+			default:
+				return nil, d.Errf("unrecognized parameter '%s'", d.Val())
+			}
 		}
-		return listenAddress, nil
 	}
-	return "", nil
+	if adminCfg.Listen == "" && !adminCfg.Disabled {
+		adminCfg.Listen = caddy.DefaultAdminListen
+	}
+	return adminCfg, nil
 }
 
 func parseOptOnDemand(d *caddyfile.Dispenser) (interface{}, error) {

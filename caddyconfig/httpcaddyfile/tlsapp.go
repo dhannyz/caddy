@@ -27,6 +27,7 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/caddyserver/caddy/v2/modules/caddytls"
 	"github.com/caddyserver/certmagic"
+	"github.com/mholt/acmez/acme"
 )
 
 func (st ServerType) buildTLSApp(
@@ -321,6 +322,9 @@ func (st ServerType) buildTLSApp(
 
 	// do a little verification & cleanup
 	if tlsApp.Automation != nil {
+		// consolidate automation policies that are the exact same
+		tlsApp.Automation.Policies = consolidateAutomationPolicies(tlsApp.Automation.Policies)
+
 		// ensure automation policies don't overlap subjects (this should be
 		// an error at provision-time as well, but catch it in the adapt phase
 		// for convenience)
@@ -333,9 +337,6 @@ func (st ServerType) buildTLSApp(
 				automationHostSet[s] = struct{}{}
 			}
 		}
-
-		// consolidate automation policies that are the exact same
-		tlsApp.Automation.Policies = consolidateAutomationPolicies(tlsApp.Automation.Policies)
 	}
 
 	return tlsApp, warnings, nil
@@ -399,7 +400,7 @@ func newBaseAutomationPolicy(options map[string]interface{}, warnings []caddycon
 			mgr.TrustedRootsPEMFiles = []string{acmeCARoot.(string)}
 		}
 		if acmeEAB != nil {
-			mgr.ExternalAccount = acmeEAB.(*caddytls.ExternalAccountBinding)
+			mgr.ExternalAccount = acmeEAB.(*acme.EAB)
 		}
 		if keyType != nil {
 			ap.KeyType = keyType.(string)
@@ -443,7 +444,12 @@ func consolidateAutomationPolicies(aps []*caddytls.AutomationPolicy) []*caddytls
 				} else if len(aps[i].Subjects) > 0 && len(aps[j].Subjects) == 0 {
 					aps = append(aps[:i], aps[i+1:]...)
 				} else {
-					aps[i].Subjects = append(aps[i].Subjects, aps[j].Subjects...)
+					// avoid repeated subjects
+					for _, subj := range aps[j].Subjects {
+						if !sliceContains(aps[i].Subjects, subj) {
+							aps[i].Subjects = append(aps[i].Subjects, subj)
+						}
+					}
 					aps = append(aps[:j], aps[j+1:]...)
 				}
 				i--

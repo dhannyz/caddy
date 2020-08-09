@@ -90,7 +90,7 @@ func TestCookie(t *testing.T) {
 		},
 		{
 			// cookie with optional fields
-			cookie:     &http.Cookie{Name: "cookie", Value: "cookieValue", Path: "/path", Domain: "https://localhost", Expires: (time.Now().Add(10 * time.Minute)), MaxAge: 120},
+			cookie:     &http.Cookie{Name: "cookie", Value: "cookieValue", Path: "/path", Domain: "https://localhost", Expires: time.Now().Add(10 * time.Minute), MaxAge: 120},
 			cookieName: "cookie",
 			expect:     "cookieValue",
 		},
@@ -315,6 +315,17 @@ title: Welcome
 ### Test`,
 			expect: `Welcome`,
 			body:   "\n### Test",
+		},
+		{
+			// yaml with non-fence '...' line after closing fence (i.e. first matching closing fence should be used)
+			input: `---
+title: Welcome
+---
+### Test
+...
+yeah`,
+			expect: `Welcome`,
+			body:   "\n### Test\n...\nyeah",
 		},
 		{
 			// toml
