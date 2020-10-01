@@ -155,6 +155,7 @@ func (app *App) Provision(ctx caddy.Context) error {
 
 	// prepare each server
 	for srvName, srv := range app.Servers {
+		srv.name = srvName
 		srv.tlsApp = app.tlsApp
 		srv.logger = app.logger.Named("log")
 		srv.errorLogger = app.logger.Named("log.error")
@@ -281,6 +282,12 @@ func (app *App) Validate() error {
 // Start runs the app. It finishes automatic HTTPS if enabled,
 // including management of certificates.
 func (app *App) Start() error {
+	// get a logger compatible with http.Server
+	serverLogger, err := zap.NewStdLogAt(app.logger.Named("stdlib"), zap.DebugLevel)
+	if err != nil {
+		return fmt.Errorf("failed to set up server logger: %v", err)
+	}
+
 	for srvName, srv := range app.Servers {
 		s := &http.Server{
 			ReadTimeout:       time.Duration(srv.ReadTimeout),
@@ -289,6 +296,7 @@ func (app *App) Start() error {
 			IdleTimeout:       time.Duration(srv.IdleTimeout),
 			MaxHeaderBytes:    srv.MaxHeaderBytes,
 			Handler:           srv,
+			ErrorLog:          serverLogger,
 		}
 
 		// enable h2c if configured
@@ -344,6 +352,7 @@ func (app *App) Start() error {
 								Addr:      hostport,
 								Handler:   srv,
 								TLSConfig: tlsCfg,
+								ErrorLog:  serverLogger,
 							},
 						}
 						go h3srv.Serve(h3ln)
@@ -382,7 +391,7 @@ func (app *App) Start() error {
 
 	// finish automatic HTTPS by finally beginning
 	// certificate management
-	err := app.automaticHTTPSPhase2()
+	err = app.automaticHTTPSPhase2()
 	if err != nil {
 		return fmt.Errorf("finalizing automatic HTTPS: %v", err)
 	}
