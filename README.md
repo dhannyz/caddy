@@ -1,6 +1,9 @@
 <p align="center">
 	<a href="https://caddyserver.com"><img src="https://user-images.githubusercontent.com/1128849/36338535-05fb646a-136f-11e8-987b-e6901e717d5a.png" alt="Caddy" width="450"></a>
+	<br>
+	<h3 align="center">a <a href="https://zerossl.com"><img src="https://caddyserver.com/resources/images/zerossl-logo.svg" height="28" valign="middle"></a> project</h3>
 </p>
+<hr>
 <h3 align="center">Every site on HTTPS</h3>
 <p align="center">Caddy is an extensible server platform that uses TLS by default.</p>
 <p align="center">
@@ -22,6 +25,7 @@
 ### Menu
 
 - [Features](#features)
+- [Install](#install)
 - [Build from source](#build-from-source)
 	- [For development](#for-development)
 	- [With version information and/or plugins](#with-version-information-andor-plugins)
@@ -56,7 +60,11 @@
 - Actually **fun to use**
 - So, so much more to discover
 
+## Install
 
+You can install Caddy by downloading from the Github Releases and placing it in your PATH.
+
+For other install options, see https://caddyserver.com/docs/download.
 
 ## Build from source
 
@@ -145,7 +153,9 @@ Please use our [issue tracker](https://github.com/caddyserver/caddy/issues) only
 
 ## About
 
-**The name "Caddy" is trademarked.** The name of the software is "Caddy", not "Caddy Server" or "CaddyServer". Please call it "Caddy" or, if you wish to clarify, "the Caddy web server". Caddy is a registered trademark of Light Code Labs, LLC.
+**The name "Caddy" is trademarked.** The name of the software is "Caddy", not "Caddy Server" or "CaddyServer". Please call it "Caddy" or, if you wish to clarify, "the Caddy web server". Caddy is a registered trademark of apilayer GmbH.
 
 - _Project on Twitter: [@caddyserver](https://twitter.com/caddyserver)_
 - _Author on Twitter: [@mholt6](https://twitter.com/mholt6)_
+
+Caddy is a project of [ZeroSSL](https://zerossl.com), an [apilayer](https://apilayer.com) company.

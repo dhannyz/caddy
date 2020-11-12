@@ -62,6 +62,9 @@ type HTTPTransport struct {
 	// Maximum number of connections per host. Default: 0 (no limit)
 	MaxConnsPerHost int `json:"max_conns_per_host,omitempty"`
 
+	// Maximum number of idle connections per host. Default: 0 (uses Go's default of 2)
+	MaxIdleConnsPerHost int `json:"max_idle_conns_per_host,omitempty"`
+
 	// How long to wait before timing out trying to connect to
 	// an upstream.
 	DialTimeout caddy.Duration `json:"dial_timeout,omitempty"`
@@ -182,9 +185,6 @@ func (h *HTTPTransport) NewTransport(ctx caddy.Context) (*http.Transport, error)
 			if dialInfo, ok := GetDialInfo(ctx); ok {
 				network = dialInfo.Network
 				address = dialInfo.Address
-				if dialInfo.Upstream.networkAddress.IsUnixNetwork() {
-					address = dialInfo.Host
-				}
 			}
 			conn, err := dialer.DialContext(ctx, network, address)
 			if err != nil {
@@ -196,6 +196,7 @@ func (h *HTTPTransport) NewTransport(ctx caddy.Context) (*http.Transport, error)
 			return conn, nil
 		},
 		MaxConnsPerHost:        h.MaxConnsPerHost,
+		MaxIdleConnsPerHost:    h.MaxIdleConnsPerHost,
 		ResponseHeaderTimeout:  time.Duration(h.ResponseHeaderTimeout),
 		ExpectContinueTimeout:  time.Duration(h.ExpectContinueTimeout),
 		MaxResponseHeaderBytes: h.MaxResponseHeaderSize,
