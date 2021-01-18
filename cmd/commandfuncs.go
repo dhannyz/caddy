@@ -96,7 +96,7 @@ func cmdStart(fl Flags) (int, error) {
 	// started yet, and writing synchronously would result
 	// in a deadlock
 	go func() {
-		stdinpipe.Write(expect)
+		_, _ = stdinpipe.Write(expect)
 		stdinpipe.Close()
 	}()
 
@@ -271,6 +271,10 @@ func cmdRun(fl Flags) (int, error) {
 		}
 	}
 
+	if err := NotifyReadiness(); err != nil {
+		caddy.Log().Error("unable to notify readiness to service manager", zap.Error(err))
+	}
+
 	select {}
 }
 
@@ -290,6 +294,15 @@ func cmdReload(fl Flags) (int, error) {
 	reloadCmdConfigFlag := fl.String("config")
 	reloadCmdConfigAdapterFlag := fl.String("adapter")
 	reloadCmdAddrFlag := fl.String("address")
+
+	if err := NotifyReloading(); err != nil {
+		caddy.Log().Error("unable to notify reloading to service manager", zap.Error(err))
+	}
+	defer func() {
+		if err := NotifyReadiness(); err != nil {
+			caddy.Log().Error("unable to notify readiness to service manager", zap.Error(err))
+		}
+	}()
 
 	// get the config in caddy's native format
 	config, configFile, err := loadConfig(reloadCmdConfigFlag, reloadCmdConfigAdapterFlag)
@@ -323,19 +336,7 @@ func cmdReload(fl Flags) (int, error) {
 }
 
 func cmdVersion(_ Flags) (int, error) {
-	goModule := caddy.GoModule()
-	fmt.Print(goModule.Version)
-	if goModule.Sum != "" {
-		// a build with a known version will also have a checksum
-		fmt.Printf(" %s", goModule.Sum)
-	}
-	if goModule.Replace != nil {
-		fmt.Printf(" => %s", goModule.Replace.Path)
-		if goModule.Replace.Version != "" {
-			fmt.Printf(" %s", goModule.Replace.Version)
-		}
-	}
-	fmt.Println()
+	fmt.Println(caddyVersion())
 	return caddy.ExitCodeSuccess, nil
 }
 
@@ -360,12 +361,37 @@ func cmdBuildInfo(fl Flags) (int, error) {
 }
 
 func cmdListModules(fl Flags) (int, error) {
+	packages := fl.Bool("packages")
 	versions := fl.Bool("versions")
 
+	type moduleInfo struct {
+		caddyModuleID string
+		goModule      *debug.Module
+		err           error
+	}
+	printModuleInfo := func(mi moduleInfo) {
+		fmt.Print(mi.caddyModuleID)
+		if versions && mi.goModule != nil {
+			fmt.Print(" " + mi.goModule.Version)
+		}
+		if packages && mi.goModule != nil {
+			fmt.Print(" " + mi.goModule.Path)
+			if mi.goModule.Replace != nil {
+				fmt.Print(" => " + mi.goModule.Replace.Path)
+			}
+		}
+		if mi.err != nil {
+			fmt.Printf(" [%v]", mi.err)
+		}
+		fmt.Println()
+	}
+
+	// organize modules by whether they come with the standard distribution
+	var standard, nonstandard, unknown []moduleInfo
+
 	bi, ok := debug.ReadBuildInfo()
-	if !ok || !versions {
-		// if there's no build information,
-		// just print out the modules
+	if !ok {
+		// oh well, just print the module IDs and exit
 		for _, m := range caddy.Modules() {
 			fmt.Println(m)
 		}
@@ -375,8 +401,8 @@ func cmdListModules(fl Flags) (int, error) {
 	for _, modID := range caddy.Modules() {
 		modInfo, err := caddy.GetModule(modID)
 		if err != nil {
-			// that's weird
-			fmt.Println(modID)
+			// that's weird, shouldn't happen
+			unknown = append(unknown, moduleInfo{caddyModuleID: modID, err: err})
 			continue
 		}
 
@@ -404,15 +430,39 @@ func cmdListModules(fl Flags) (int, error) {
 			}
 		}
 
-		// if we could find no matching module, just print out
-		// the module ID instead
-		if matched == nil {
-			fmt.Println(modID)
-			continue
-		}
+		caddyModGoMod := moduleInfo{caddyModuleID: modID, goModule: matched}
 
-		fmt.Printf("%s %s\n", modID, matched.Version)
+		if strings.HasPrefix(modPkgPath, caddy.ImportPath) {
+			standard = append(standard, caddyModGoMod)
+		} else {
+			nonstandard = append(nonstandard, caddyModGoMod)
+		}
 	}
+
+	if len(standard) > 0 {
+		for _, mod := range standard {
+			printModuleInfo(mod)
+		}
+	}
+	fmt.Printf("\n  Standard modules: %d\n", len(standard))
+	if len(nonstandard) > 0 {
+		if len(standard) > 0 {
+			fmt.Println()
+		}
+		for _, mod := range nonstandard {
+			printModuleInfo(mod)
+		}
+	}
+	fmt.Printf("\n  Non-standard modules: %d\n", len(nonstandard))
+	if len(unknown) > 0 {
+		if len(standard) > 0 || len(nonstandard) > 0 {
+			fmt.Println()
+		}
+		for _, mod := range unknown {
+			printModuleInfo(mod)
+		}
+	}
+	fmt.Printf("\n  Unknown modules: %d\n", len(unknown))
 
 	return caddy.ExitCodeSuccess, nil
 }
@@ -463,15 +513,20 @@ func cmdAdaptConfig(fl Flags) (int, error) {
 			fmt.Errorf("reading input file: %v", err)
 	}
 
-	opts := make(map[string]interface{})
-	if adaptCmdPrettyFlag {
-		opts["pretty"] = "true"
-	}
-	opts["filename"] = adaptCmdInputFlag
+	opts := map[string]interface{}{"filename": adaptCmdInputFlag}
 
 	adaptedConfig, warnings, err := cfgAdapter.Adapt(input, opts)
 	if err != nil {
 		return caddy.ExitCodeFailedStartup, err
+	}
+
+	if adaptCmdPrettyFlag {
+		var prettyBuf bytes.Buffer
+		err = json.Indent(&prettyBuf, adaptedConfig, "", "\t")
+		if err != nil {
+			return caddy.ExitCodeFailedStartup, err
+		}
+		adaptedConfig = prettyBuf.Bytes()
 	}
 
 	// print warnings to stderr

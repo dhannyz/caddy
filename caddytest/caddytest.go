@@ -124,10 +124,10 @@ func (tc *Tester) initServer(rawConfig string, configType string) error {
 				return
 			}
 			defer res.Body.Close()
-			body, err := ioutil.ReadAll(res.Body)
+			body, _ := ioutil.ReadAll(res.Body)
 
 			var out bytes.Buffer
-			json.Indent(&out, body, "", "  ")
+			_ = json.Indent(&out, body, "", "  ")
 			tc.t.Logf("----------- failed with config -----------\n%s", out.String())
 		}
 	})
@@ -221,10 +221,11 @@ func isCaddyAdminRunning() error {
 	client := &http.Client{
 		Timeout: Default.LoadRequestTimeout,
 	}
-	_, err := client.Get(fmt.Sprintf("http://localhost:%d/config/", Default.AdminPort))
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/config/", Default.AdminPort))
 	if err != nil {
-		return errors.New("caddy integration test caddy server not running. Expected to be listening on localhost:2019")
+		return fmt.Errorf("caddy integration test caddy server not running. Expected to be listening on localhost:%d", Default.AdminPort)
 	}
+	resp.Body.Close()
 
 	return nil
 }
@@ -272,7 +273,7 @@ func CreateTestingTransport() *http.Transport {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
 	}
 }
 
@@ -313,9 +314,13 @@ func (tc *Tester) AssertRedirect(requestURI string, expectedToLocation string, e
 	if err != nil {
 		tc.t.Errorf("requesting \"%s\" expected location: \"%s\" but got error: %s", requestURI, expectedToLocation, err)
 	}
-
-	if expectedToLocation != loc.String() {
-		tc.t.Errorf("requesting \"%s\" expected location: \"%s\" but got \"%s\"", requestURI, expectedToLocation, loc.String())
+	if loc == nil && expectedToLocation != "" {
+		tc.t.Errorf("requesting \"%s\" expected a Location header, but didn't get one", requestURI)
+	}
+	if loc != nil {
+		if expectedToLocation != loc.String() {
+			tc.t.Errorf("requesting \"%s\" expected location: \"%s\" but got \"%s\"", requestURI, expectedToLocation, loc.String())
+		}
 	}
 
 	return resp
@@ -331,13 +336,20 @@ func CompareAdapt(t *testing.T, rawConfig string, adapterName string, expectedRe
 	}
 
 	options := make(map[string]interface{})
-	options["pretty"] = "true"
 
 	result, warnings, err := cfgAdapter.Adapt([]byte(rawConfig), options)
 	if err != nil {
 		t.Logf("adapting config using %s adapter: %v", adapterName, err)
 		return false
 	}
+
+	// prettify results to keep tests human-manageable
+	var prettyBuf bytes.Buffer
+	err = json.Indent(&prettyBuf, result, "", "\t")
+	if err != nil {
+		return false
+	}
+	result = prettyBuf.Bytes()
 
 	if len(warnings) > 0 {
 		for _, w := range warnings {

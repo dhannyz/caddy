@@ -480,6 +480,16 @@ func TestHeaderMatcher(t *testing.T) {
 			host:   "caddyserver.com",
 			expect: false,
 		},
+		{
+			match:  MatchHeader{"Must-Not-Exist": nil},
+			input:  http.Header{},
+			expect: true,
+		},
+		{
+			match:  MatchHeader{"Must-Not-Exist": nil},
+			input:  http.Header{"Must-Not-Exist": []string{"do not match"}},
+			expect: false,
+		},
 	} {
 		req := &http.Request{Header: tc.input, Host: tc.host}
 		actual := tc.match.Match(req)
@@ -1006,6 +1016,33 @@ func TestNotMatcher(t *testing.T) {
 			t.Errorf("Test %d %+v: Expected %t, got %t for: host=%s path=%s'", i, tc.match, tc.expect, actual, tc.host, tc.path)
 			continue
 		}
+	}
+}
+func BenchmarkLargeHostMatcher(b *testing.B) {
+	// this benchmark simulates a large host matcher (thousands of entries) where each
+	// value is an exact hostname (not a placeholder or wildcard) - compare the results
+	// of this with and without the binary search (comment out the various fast path
+	// sections in Match) to conduct experiments
+
+	const n = 10000
+	lastHost := fmt.Sprintf("%d.example.com", n-1)
+	req := &http.Request{Host: lastHost}
+	repl := caddy.NewReplacer()
+	ctx := context.WithValue(req.Context(), caddy.ReplacerCtxKey, repl)
+	req = req.WithContext(ctx)
+
+	matcher := make(MatchHost, n)
+	for i := 0; i < n; i++ {
+		matcher[i] = fmt.Sprintf("%d.example.com", i)
+	}
+	err := matcher.Provision(caddy.Context{})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		matcher.Match(req)
 	}
 }
 

@@ -12,7 +12,9 @@
 	<br>
 	<a href="https://twitter.com/caddyserver" title="@caddyserver on Twitter"><img src="https://img.shields.io/badge/twitter-@caddyserver-55acee.svg" alt="@caddyserver on Twitter"></a>
 	<a href="https://caddy.community" title="Caddy Forum"><img src="https://img.shields.io/badge/community-forum-ff69b4.svg" alt="Caddy Forum"></a>
+	<br>
 	<a href="https://sourcegraph.com/github.com/caddyserver/caddy?badge" title="Caddy on Sourcegraph"><img src="https://sourcegraph.com/github.com/caddyserver/caddy/-/badge.svg" alt="Caddy on Sourcegraph"></a>
+	<a href="https://cloudsmith.io/~caddy/repos/"><img src="https://img.shields.io/badge/OSS%20hosting%20by-cloudsmith-blue?logo=cloudsmith" alt="Cloudsmith"></a>
 </p>
 <p align="center">
 	<a href="https://github.com/caddyserver/caddy/releases">Releases</a> ·
@@ -42,27 +44,30 @@
 </p>
 
 
-## Features
+## [Features](https://caddyserver.com/v2)
 
 - **Easy configuration** with the [Caddyfile](https://caddyserver.com/docs/caddyfile)
 - **Powerful configuration** with its [native JSON config](https://caddyserver.com/docs/json/)
 - **Dynamic configuration** with the [JSON API](https://caddyserver.com/docs/api)
 - [**Config adapters**](https://caddyserver.com/docs/config-adapters) if you don't like JSON
 - **Automatic HTTPS** by default
-	- [Let's Encrypt](https://letsencrypt.org) for public sites
+	- [ZeroSSL](https://zerossl.com) and [Let's Encrypt](https://letsencrypt.org) for public names
 	- Fully-managed local CA for internal names & IPs
 	- Can coordinate with other Caddy instances in a cluster
+	- Multi-issuer fallback
 - **Stays up when other servers go down** due to TLS/OCSP/certificate-related issues
+- **Production-ready** after serving trillions of requests and managing millions of TLS certificates
+- **Scales to tens of thousands of sites** ... and probably more
 - **HTTP/1.1, HTTP/2, and experimental HTTP/3** support
 - **Highly extensible** [modular architecture](https://caddyserver.com/docs/architecture) lets Caddy do anything without bloat
 - **Runs anywhere** with **no external dependencies** (not even libc)
 - Written in Go, a language with higher **memory safety guarantees** than other servers
 - Actually **fun to use**
-- So, so much more to discover
+- So, so much more to [discover](https://caddyserver.com/v2)
 
 ## Install
 
-You can install Caddy by downloading from the Github Releases and placing it in your PATH.
+The simplest, cross-platform way is to download from [GitHub Releases](https://github.com/caddyserver/caddy/releases) and place the executable file in your PATH.
 
 For other install options, see https://caddyserver.com/docs/download.
 
@@ -74,13 +79,37 @@ Requirements:
 
 ### For development
  
+_**Note:** These steps [will not embed proper version information](https://github.com/golang/go/issues/29228). For that, please follow the instructions in the next section._
+
 ```bash
 $ git clone "https://github.com/caddyserver/caddy.git"
 $ cd caddy/cmd/caddy/
 $ go build
 ```
 
-_**Note:** These steps [will not embed proper version information](https://github.com/golang/go/issues/29228). For that, please follow the instructions below._
+When you run Caddy, it may try to bind to low ports unless otherwise specified in your config. If your OS requires elevated privileges for this, you will need to give your new binary permission to do so. On Linux, this can be done easily with: `sudo setcap cap_net_bind_service=+ep ./caddy`
+
+If you prefer to use `go run` which creates temporary binaries, you can still do this. Make an executable file called `setcap.sh` (or whatever you want) with these contents:
+
+```bash
+#!/bin/sh
+sudo setcap cap_net_bind_service=+ep "$1"
+"$@"
+```
+
+then you can use `go run` like so:
+
+```bash
+$ go run -exec ./setcap.sh main.go
+```
+
+If you don't want to type your password for `setcap`, use `sudo visudo` to edit your sudoers file and allow your user account to run that command without a password, for example:
+
+```
+username ALL=(ALL:ALL) NOPASSWD: /usr/sbin/setcap
+```
+
+replacing `username` with your actual username. Please be careful and only do this if you know what you are doing! We are only qualified to document how to use Caddy, not Go tooling or your computer, and we are providing these instructions for convenience only; please learn how to use your own computer at your own risk and make any needful adjustments.
 
 ### With version information and/or plugins
 
@@ -96,7 +125,7 @@ $ xcaddy build
 2. Change into it: `cd caddy`
 3. Copy [Caddy's main.go](https://github.com/caddyserver/caddy/blob/master/cmd/caddy/main.go) into the empty folder. Add imports for any custom plugins you want to add.
 4. Initialize a Go module: `go mod init caddy`
-5. (Optional) Pin Caddy version: `go get github.com/caddyserver/caddy/v2@version` replacing `version` with a git tag or commit.
+5. (Optional) Pin Caddy version: `go get github.com/caddyserver/caddy/v2@version` replacing `version` with a git tag, commit, or branch name.
 6. (Optional) Add plugins by adding their import: `_ "import/path/here"`
 7. Compile: `go build`
 
@@ -107,7 +136,7 @@ $ xcaddy build
 
 The [Caddy website](https://caddyserver.com/docs/) has documentation that includes tutorials, quick-start guides, reference, and more.
 
-**We recommend that all users do our [Getting Started](https://caddyserver.com/docs/getting-started) guide to become familiar with using Caddy.**
+**We recommend that all users -- regardless of experience level -- do our [Getting Started](https://caddyserver.com/docs/getting-started) guide to become familiar with using Caddy.**
 
 If you've only got a minute, [the website has several quick-start tutorials](https://caddyserver.com/docs/quick-starts) to choose from! However, after finishing a quick-start tutorial, please read more documentation to understand how the software works. 🙂
 
@@ -145,6 +174,8 @@ The docs are also open source. You can contribute to them here: https://github.c
 
 - We **strongly recommend** that all professionals or companies using Caddy get a support contract through [Ardan Labs](https://www.ardanlabs.com/my/contact-us?dd=caddy) before help is needed.
 
+- A [sponsorship](https://github.com/sponsors/mholt) goes a long way! If Caddy is benefitting your company, please consider a sponsorship! This not only helps fund full-time work to ensure the longevity of the project, it's also a great look for your company to your customers and potential customers!
+
 - Individuals can exchange help for free on our community forum at https://caddy.community. Remember that people give help out of their spare time and good will. The best way to get help is to give it first!
 
 Please use our [issue tracker](https://github.com/caddyserver/caddy/issues) only for bug reports and feature requests, i.e. actionable development items (support questions will usually be referred to the forums).
@@ -153,9 +184,11 @@ Please use our [issue tracker](https://github.com/caddyserver/caddy/issues) only
 
 ## About
 
-**The name "Caddy" is trademarked.** The name of the software is "Caddy", not "Caddy Server" or "CaddyServer". Please call it "Caddy" or, if you wish to clarify, "the Caddy web server". Caddy is a registered trademark of apilayer GmbH.
+**The name "Caddy" is trademarked.** The name of the software is "Caddy", not "Caddy Server" or "CaddyServer". Please call it "Caddy" or, if you wish to clarify, "the Caddy web server". Caddy is a registered trademark of Stack Holdings GmbH.
 
 - _Project on Twitter: [@caddyserver](https://twitter.com/caddyserver)_
 - _Author on Twitter: [@mholt6](https://twitter.com/mholt6)_
 
-Caddy is a project of [ZeroSSL](https://zerossl.com), an [apilayer](https://apilayer.com) company.
+Caddy is a project of [ZeroSSL](https://zerossl.com), a Stack Holdings company.
+
+Debian package repository hosting is graciously provided by [Cloudsmith](https://cloudsmith.com). Cloudsmith is the only fully hosted, cloud-native, universal package management solution, that enables your organization to create, store and share packages in any format, to any place, with total confidence.

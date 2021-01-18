@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -241,7 +242,11 @@ func (h *Handler) doActiveHealthCheck(dialInfo DialInfo, hostAddr string, host H
 		return fmt.Errorf("making request: %v", err)
 	}
 	for key, hdrs := range h.HealthChecks.Active.Headers {
-		req.Header[key] = hdrs
+		if strings.ToLower(key) == "host" {
+			req.Host = h.HealthChecks.Active.Headers.Get(key)
+		} else {
+			req.Header[key] = hdrs
+		}
 	}
 
 	// do the request, being careful to tame the response body
@@ -263,7 +268,7 @@ func (h *Handler) doActiveHealthCheck(dialInfo DialInfo, hostAddr string, host H
 	}
 	defer func() {
 		// drain any remaining body so connection could be re-used
-		io.Copy(ioutil.Discard, body)
+		_, _ = io.Copy(ioutil.Discard, body)
 		resp.Body.Close()
 	}()
 

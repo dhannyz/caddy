@@ -108,49 +108,49 @@ func (st ServerType) buildTLSApp(
 				ap.OnDemand = true
 			}
 
+			if keyTypeVals, ok := sblock.pile["tls.key_type"]; ok {
+				ap.KeyType = keyTypeVals[0].Value.(string)
+			}
+
 			// certificate issuers
 			if issuerVals, ok := sblock.pile["tls.cert_issuer"]; ok {
+				var issuers []certmagic.Issuer
 				for _, issuerVal := range issuerVals {
-					issuer := issuerVal.Value.(certmagic.Issuer)
-					if ap == catchAllAP && !reflect.DeepEqual(ap.Issuer, issuer) {
-						return nil, warnings, fmt.Errorf("automation policy from site block is also default/catch-all policy because of key without hostname, and the two are in conflict: %#v != %#v", ap.Issuer, issuer)
-					}
-					ap.Issuer = issuer
+					ap.Issuers = append(ap.Issuers, issuerVal.Value.(certmagic.Issuer))
+				}
+				if ap == catchAllAP && !reflect.DeepEqual(ap.Issuers, issuers) {
+					return nil, warnings, fmt.Errorf("automation policy from site block is also default/catch-all policy because of key without hostname, and the two are in conflict: %#v != %#v", ap.Issuers, issuers)
 				}
 			}
 
 			// custom bind host
 			for _, cfgVal := range sblock.pile["bind"] {
-				// if an issuer was already configured and it is NOT an ACME
-				// issuer, skip, since we intend to adjust only ACME issuers
-				var acmeIssuer *caddytls.ACMEIssuer
-				if ap.Issuer != nil {
-					// ensure we include any issuer that embeds/wraps an underlying ACME issuer
-					type acmeCapable interface{ GetACMEIssuer() *caddytls.ACMEIssuer }
-					if acmeWrapper, ok := ap.Issuer.(acmeCapable); ok {
+				for _, iss := range ap.Issuers {
+					// if an issuer was already configured and it is NOT an ACME issuer,
+					// skip, since we intend to adjust only ACME issuers; ensure we
+					// include any issuer that embeds/wraps an underlying ACME issuer
+					var acmeIssuer *caddytls.ACMEIssuer
+					if acmeWrapper, ok := iss.(acmeCapable); ok {
 						acmeIssuer = acmeWrapper.GetACMEIssuer()
-					} else {
-						break
 					}
-				}
+					if acmeIssuer == nil {
+						continue
+					}
 
-				// proceed to configure the ACME issuer's bind host, without
-				// overwriting any existing settings
-				if acmeIssuer == nil {
-					acmeIssuer = new(caddytls.ACMEIssuer)
-				}
-				if acmeIssuer.Challenges == nil {
-					acmeIssuer.Challenges = new(caddytls.ChallengesConfig)
-				}
-				if acmeIssuer.Challenges.BindHost == "" {
-					// only binding to one host is supported
-					var bindHost string
-					if bindHosts, ok := cfgVal.Value.([]string); ok && len(bindHosts) > 0 {
-						bindHost = bindHosts[0]
+					// proceed to configure the ACME issuer's bind host, without
+					// overwriting any existing settings
+					if acmeIssuer.Challenges == nil {
+						acmeIssuer.Challenges = new(caddytls.ChallengesConfig)
 					}
-					acmeIssuer.Challenges.BindHost = bindHost
+					if acmeIssuer.Challenges.BindHost == "" {
+						// only binding to one host is supported
+						var bindHost string
+						if bindHosts, ok := cfgVal.Value.([]string); ok && len(bindHosts) > 0 {
+							bindHost = bindHosts[0]
+						}
+						acmeIssuer.Challenges.BindHost = bindHost
+					}
 				}
-				ap.Issuer = acmeIssuer // we'll encode it later
 			}
 
 			// first make sure this block is allowed to create an automation policy;
@@ -188,7 +188,7 @@ func (st ServerType) buildTLSApp(
 			// that the internal names can use the internal issuer and
 			// the other names can use the default/public/ACME issuer
 			var ap2 *caddytls.AutomationPolicy
-			if ap.Issuer == nil {
+			if len(ap.Issuers) == 0 {
 				var internal, external []string
 				for _, s := range ap.Subjects {
 					if !certmagic.SubjectQualifiesForCert(s) {
@@ -212,7 +212,7 @@ func (st ServerType) buildTLSApp(
 					apCopy := *ap
 					ap2 = &apCopy
 					ap2.Subjects = internal
-					ap2.IssuerRaw = caddyconfig.JSONModuleObject(caddytls.InternalIssuer{}, "module", "internal", &warnings)
+					ap2.IssuersRaw = []json.RawMessage{caddyconfig.JSONModuleObject(caddytls.InternalIssuer{}, "module", "internal", &warnings)}
 				}
 			}
 			if tlsApp.Automation == nil {
@@ -277,7 +277,7 @@ func (st ServerType) buildTLSApp(
 	// get internal certificates by default rather than ACME
 	var al caddytls.AutomateLoader
 	internalAP := &caddytls.AutomationPolicy{
-		IssuerRaw: json.RawMessage(`{"module":"internal"}`),
+		IssuersRaw: []json.RawMessage{json.RawMessage(`{"module":"internal"}`)},
 	}
 	for h := range hostsSharedWithHostlessKey {
 		al = append(al, h)
@@ -295,14 +295,48 @@ func (st ServerType) buildTLSApp(
 		tlsApp.Automation.Policies = append(tlsApp.Automation.Policies, internalAP)
 	}
 
+	// if there are any global options set for issuers (ACME ones in particular), make sure they
+	// take effect in every automation policy that does not have any issuers
+	if tlsApp.Automation != nil {
+		globalEmail := options["email"]
+		globalACMECA := options["acme_ca"]
+		globalACMECARoot := options["acme_ca_root"]
+		globalACMEDNS := options["acme_dns"]
+		globalACMEEAB := options["acme_eab"]
+		hasGlobalACMEDefaults := globalEmail != nil || globalACMECA != nil || globalACMECARoot != nil || globalACMEDNS != nil || globalACMEEAB != nil
+		if hasGlobalACMEDefaults {
+			for _, ap := range tlsApp.Automation.Policies {
+				if len(ap.Issuers) == 0 {
+					acme, zerosslACME := new(caddytls.ACMEIssuer), new(caddytls.ACMEIssuer)
+					zerossl := &caddytls.ZeroSSLIssuer{ACMEIssuer: zerosslACME}
+					ap.Issuers = []certmagic.Issuer{acme, zerossl} // TODO: keep this in sync with Caddy's other issuer defaults elsewhere, like in caddytls/automation.go (DefaultIssuers).
+
+					// if a non-ZeroSSL endpoint is specified, we assume we can't use the ZeroSSL issuer successfully
+					if globalACMECA != nil && !strings.Contains(globalACMECA.(string), "zerossl") {
+						ap.Issuers = []certmagic.Issuer{acme}
+					}
+				}
+			}
+		}
+	}
+
 	// finalize and verify policies; do cleanup
 	if tlsApp.Automation != nil {
-		// encode any issuer values we created, so they will be rendered in the output
-		for _, ap := range tlsApp.Automation.Policies {
-			if ap.Issuer != nil && ap.IssuerRaw == nil {
-				// encode issuer now that it's all set up
-				issuerName := ap.Issuer.(caddy.Module).CaddyModule().ID.Name()
-				ap.IssuerRaw = caddyconfig.JSONModuleObject(ap.Issuer, "module", issuerName, &warnings)
+		for i, ap := range tlsApp.Automation.Policies {
+			// ensure all issuers have global defaults filled in
+			for j, issuer := range ap.Issuers {
+				err := fillInGlobalACMEDefaults(issuer, options)
+				if err != nil {
+					return nil, warnings, fmt.Errorf("filling in global issuer defaults for AP %d, issuer %d: %v", i, j, err)
+				}
+			}
+
+			// encode all issuer values we created, so they will be rendered in the output
+			if len(ap.Issuers) > 0 && ap.IssuersRaw == nil {
+				for _, iss := range ap.Issuers {
+					issuerName := iss.(caddy.Module).CaddyModule().ID.Name()
+					ap.IssuersRaw = append(ap.IssuersRaw, caddyconfig.JSONModuleObject(iss, "module", issuerName, &warnings))
+				}
 			}
 		}
 
@@ -334,24 +368,58 @@ func (st ServerType) buildTLSApp(
 	return tlsApp, warnings, nil
 }
 
+type acmeCapable interface{ GetACMEIssuer() *caddytls.ACMEIssuer }
+
+func fillInGlobalACMEDefaults(issuer certmagic.Issuer, options map[string]interface{}) error {
+	acmeWrapper, ok := issuer.(acmeCapable)
+	if !ok {
+		return nil
+	}
+	acmeIssuer := acmeWrapper.GetACMEIssuer()
+	if acmeIssuer == nil {
+		return nil
+	}
+
+	globalEmail := options["email"]
+	globalACMECA := options["acme_ca"]
+	globalACMECARoot := options["acme_ca_root"]
+	globalACMEDNS := options["acme_dns"]
+	globalACMEEAB := options["acme_eab"]
+
+	if globalEmail != nil && acmeIssuer.Email == "" {
+		acmeIssuer.Email = globalEmail.(string)
+	}
+	if globalACMECA != nil && acmeIssuer.CA == "" {
+		acmeIssuer.CA = globalACMECA.(string)
+	}
+	if globalACMECARoot != nil && !sliceContains(acmeIssuer.TrustedRootsPEMFiles, globalACMECARoot.(string)) {
+		acmeIssuer.TrustedRootsPEMFiles = append(acmeIssuer.TrustedRootsPEMFiles, globalACMECARoot.(string))
+	}
+	if globalACMEDNS != nil && (acmeIssuer.Challenges == nil || acmeIssuer.Challenges.DNS == nil) {
+		acmeIssuer.Challenges = &caddytls.ChallengesConfig{
+			DNS: &caddytls.DNSChallengeConfig{
+				ProviderRaw: caddyconfig.JSONModuleObject(globalACMEDNS, "name", globalACMEDNS.(caddy.Module).CaddyModule().ID.Name(), nil),
+			},
+		}
+	}
+	if globalACMEEAB != nil && acmeIssuer.ExternalAccount == nil {
+		acmeIssuer.ExternalAccount = globalACMEEAB.(*acme.EAB)
+	}
+	return nil
+}
+
 // newBaseAutomationPolicy returns a new TLS automation policy that gets
 // its values from the global options map. It should be used as the base
 // for any other automation policies. A nil policy (and no error) will be
 // returned if there are no default/global options. However, if always is
 // true, a non-nil value will always be returned (unless there is an error).
 func newBaseAutomationPolicy(options map[string]interface{}, warnings []caddyconfig.Warning, always bool) (*caddytls.AutomationPolicy, error) {
-	issuer, hasIssuer := options["cert_issuer"]
-
-	acmeCA, hasACMECA := options["acme_ca"]
-	acmeCARoot, hasACMECARoot := options["acme_ca_root"]
-	acmeDNS, hasACMEDNS := options["acme_dns"]
-	acmeEAB, hasACMEEAB := options["acme_eab"]
-
-	email, hasEmail := options["email"]
-	localCerts, hasLocalCerts := options["local_certs"]
+	issuers, hasIssuers := options["cert_issuer"]
+	_, hasLocalCerts := options["local_certs"]
 	keyType, hasKeyType := options["key_type"]
+	ocspStapling, hasOCSPStapling := options["ocsp_stapling"]
 
-	hasGlobalAutomationOpts := hasIssuer || hasACMECA || hasACMECARoot || hasACMEDNS || hasACMEEAB || hasEmail || hasLocalCerts || hasKeyType
+	hasGlobalAutomationOpts := hasIssuers || hasLocalCerts || hasKeyType || hasOCSPStapling
 
 	// if there are no global options related to automation policies
 	// set, then we can just return right away
@@ -363,48 +431,24 @@ func newBaseAutomationPolicy(options map[string]interface{}, warnings []caddycon
 	}
 
 	ap := new(caddytls.AutomationPolicy)
-	if keyType != nil {
+	if hasKeyType {
 		ap.KeyType = keyType.(string)
 	}
 
-	if hasIssuer {
-		if hasACMECA || hasACMEDNS || hasACMEEAB || hasEmail || hasLocalCerts {
-			return nil, fmt.Errorf("global options are ambiguous: cert_issuer is confusing when combined with acme_*, email, or local_certs options")
-		}
-		ap.Issuer = issuer.(certmagic.Issuer)
-	} else if localCerts != nil {
-		// internal issuer enabled trumps any ACME configurations; useful in testing
-		ap.Issuer = new(caddytls.InternalIssuer) // we'll encode it later
-	} else {
-		if acmeCA == nil {
-			acmeCA = ""
-		}
-		if email == nil {
-			email = ""
-		}
-		mgr := &caddytls.ACMEIssuer{
-			CA:    acmeCA.(string),
-			Email: email.(string),
-		}
-		if acmeDNS != nil {
-			provName := acmeDNS.(string)
-			dnsProvModule, err := caddy.GetModule("dns.providers." + provName)
-			if err != nil {
-				return nil, fmt.Errorf("getting DNS provider module named '%s': %v", provName, err)
-			}
-			mgr.Challenges = &caddytls.ChallengesConfig{
-				DNS: &caddytls.DNSChallengeConfig{
-					ProviderRaw: caddyconfig.JSONModuleObject(dnsProvModule.New(), "name", provName, &warnings),
-				},
-			}
-		}
-		if acmeCARoot != nil {
-			mgr.TrustedRootsPEMFiles = []string{acmeCARoot.(string)}
-		}
-		if acmeEAB != nil {
-			mgr.ExternalAccount = acmeEAB.(*acme.EAB)
-		}
-		ap.Issuer = disambiguateACMEIssuer(mgr) // we'll encode it later
+	if hasIssuers && hasLocalCerts {
+		return nil, fmt.Errorf("global options are ambiguous: local_certs is confusing when combined with cert_issuer, because local_certs is also a specific kind of issuer")
+	}
+
+	if hasIssuers {
+		ap.Issuers = issuers.([]certmagic.Issuer)
+	} else if hasLocalCerts {
+		ap.Issuers = []certmagic.Issuer{new(caddytls.InternalIssuer)}
+	}
+
+	if hasOCSPStapling {
+		ocspConfig := ocspStapling.(certmagic.OCSPConfig)
+		ap.DisableOCSPStapling = ocspConfig.DisableStapling
+		ap.OCSPOverrides = ocspConfig.ResponderOverrides
 	}
 
 	return ap, nil
@@ -415,7 +459,7 @@ func newBaseAutomationPolicy(options map[string]interface{}, warnings []caddycon
 // ZeroSSL), the proper wrapper over acmeIssuer will be returned instead.
 func disambiguateACMEIssuer(acmeIssuer *caddytls.ACMEIssuer) certmagic.Issuer {
 	// as a special case, we integrate with ZeroSSL's ACME endpoint if it looks like an
-	// implicit ZeroSSL configuration (this requires a  wrapper type over ACMEIssuer
+	// implicit ZeroSSL configuration (this requires a wrapper type over ACMEIssuer
 	// because of the EAB generation; if EAB is provided, we can use plain ACMEIssuer)
 	if strings.Contains(acmeIssuer.CA, "acme.zerossl.com") && acmeIssuer.ExternalAccount == nil {
 		return &caddytls.ZeroSSLIssuer{ACMEIssuer: acmeIssuer}
@@ -449,6 +493,7 @@ func consolidateAutomationPolicies(aps []*caddytls.AutomationPolicy) []*caddytls
 
 	// remove or combine duplicate policies
 	for i := 0; i < len(aps); i++ {
+		// compare only with next policies; we sorted by specificity so we must not delete earlier policies
 		for j := i + 1; j < len(aps); j++ {
 			// if they're exactly equal in every way, just keep one of them
 			if reflect.DeepEqual(aps[i], aps[j]) {
@@ -463,7 +508,7 @@ func consolidateAutomationPolicies(aps []*caddytls.AutomationPolicy) []*caddytls
 			// otherwise the one without any subjects (a catch-all) would be
 			// eaten up by the one with subjects; and if both have subjects, we
 			// need to combine their lists
-			if bytes.Equal(aps[i].IssuerRaw, aps[j].IssuerRaw) &&
+			if reflect.DeepEqual(aps[i].IssuersRaw, aps[j].IssuersRaw) &&
 				bytes.Equal(aps[i].StorageRaw, aps[j].StorageRaw) &&
 				aps[i].MustStaple == aps[j].MustStaple &&
 				aps[i].KeyType == aps[j].KeyType &&
@@ -479,6 +524,7 @@ func consolidateAutomationPolicies(aps []*caddytls.AutomationPolicy) []*caddytls
 					// '*.com', which might be different (yes we've seen this happen)
 					if automationPolicyShadows(i, aps) >= j {
 						aps = append(aps[:i], aps[i+1:]...)
+						i--
 					}
 				} else {
 					// avoid repeated subjects
@@ -488,6 +534,7 @@ func consolidateAutomationPolicies(aps []*caddytls.AutomationPolicy) []*caddytls
 						}
 					}
 					aps = append(aps[:j], aps[j+1:]...)
+					j--
 				}
 			}
 		}

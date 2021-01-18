@@ -74,6 +74,12 @@ type ACMEIssuer struct {
 	// is internal or for development/testing purposes.
 	TrustedRootsPEMFiles []string `json:"trusted_roots_pem_files,omitempty"`
 
+	// Preferences for selecting alternate certificate chains, if offered
+	// by the CA. By default, the first offered chain will be selected.
+	// If configured, the chains may be sorted and the first matching chain
+	// will be selected.
+	PreferredChains *ChainPreference `json:"preferred_chains,omitempty"`
+
 	rootPool *x509.CertPool
 	template certmagic.ACMEManager
 	magic    *certmagic.Config
@@ -91,6 +97,15 @@ func (ACMEIssuer) CaddyModule() caddy.ModuleInfo {
 // Provision sets up iss.
 func (iss *ACMEIssuer) Provision(ctx caddy.Context) error {
 	iss.logger = ctx.Logger(iss)
+
+	// expand email address, if non-empty
+	if iss.Email != "" {
+		email, err := caddy.NewReplacer().ReplaceOrErr(iss.Email, true, true)
+		if err != nil {
+			return fmt.Errorf("expanding email address '%s': %v", iss.Email, err)
+		}
+		iss.Email = email
+	}
 
 	// DNS providers
 	if iss.Challenges != nil && iss.Challenges.DNS != nil && iss.Challenges.DNS.ProviderRaw != nil {
@@ -167,6 +182,14 @@ func (iss *ACMEIssuer) makeIssuerTemplate() (certmagic.ACMEManager, error) {
 		template.ListenHost = iss.Challenges.BindHost
 	}
 
+	if iss.PreferredChains != nil {
+		template.PreferredChains = certmagic.ChainPreference{
+			Smallest:       iss.PreferredChains.Smallest,
+			AnyCommonName:  iss.PreferredChains.AnyCommonName,
+			RootCommonName: iss.PreferredChains.RootCommonName,
+		}
+	}
+
 	return template, nil
 }
 
@@ -210,7 +233,7 @@ func (iss *ACMEIssuer) GetACMEIssuer() *ACMEIssuer { return iss }
 
 // UnmarshalCaddyfile deserializes Caddyfile tokens into iss.
 //
-//     ... acme {
+//     ... acme [<directory_url>] {
 //         dir <directory_url>
 //         test_dir <test_directory_url>
 //         email <email>
@@ -227,9 +250,18 @@ func (iss *ACMEIssuer) GetACMEIssuer() *ACMEIssuer { return iss }
 //
 func (iss *ACMEIssuer) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
+		if d.NextArg() {
+			iss.CA = d.Val()
+			if d.NextArg() {
+				return d.ArgErr()
+			}
+		}
 		for nesting := d.Nesting(); d.NextBlock(nesting); {
 			switch d.Val() {
 			case "dir":
+				if iss.CA != "" {
+					return d.Errf("directory is already specified: %s", iss.CA)
+				}
 				if !d.AllArgs(&iss.CA) {
 					return d.ArgErr()
 				}
@@ -331,18 +363,11 @@ func (iss *ACMEIssuer) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				if iss.Challenges.DNS == nil {
 					iss.Challenges.DNS = new(DNSChallengeConfig)
 				}
-				dnsProvModule, err := caddy.GetModule("dns.providers." + provName)
+				unm, err := caddyfile.UnmarshalModule(d, "dns.providers."+provName)
 				if err != nil {
-					return d.Errf("getting DNS provider module named '%s': %v", provName, err)
+					return err
 				}
-				dnsProvModuleInstance := dnsProvModule.New()
-				if unm, ok := dnsProvModuleInstance.(caddyfile.Unmarshaler); ok {
-					err = unm.UnmarshalCaddyfile(d.NewFromNextSegment())
-					if err != nil {
-						return err
-					}
-				}
-				iss.Challenges.DNS.ProviderRaw = caddyconfig.JSONModuleObject(dnsProvModuleInstance, "name", provName, nil)
+				iss.Challenges.DNS.ProviderRaw = caddyconfig.JSONModuleObject(unm, "name", provName, nil)
 
 			case "resolvers":
 				if iss.Challenges == nil {
@@ -390,6 +415,22 @@ func onDemandAskRequest(ask string, name string) error {
 	}
 
 	return nil
+}
+
+// ChainPreference describes the client's preferred certificate chain,
+// useful if the CA offers alternate chains. The first matching chain
+// will be selected.
+type ChainPreference struct {
+	// Prefer chains with the fewest number of bytes.
+	Smallest *bool `json:"smallest,omitempty"`
+
+	// Select first chain having a root with one of
+	// these common names.
+	RootCommonName []string `json:"root_common_name,omitempty"`
+
+	// Select first chain that has any issuer with one
+	// of these common names.
+	AnyCommonName []string `json:"any_common_name,omitempty"`
 }
 
 // Interface guards
