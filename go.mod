@@ -9,20 +9,11 @@ require (
 	github.com/caddyserver/certmagic v0.12.1-0.20210107224522-725b69d53d57
 	github.com/dustin/go-humanize v1.0.1-0.20200219035652-afde56e7acac
 	github.com/go-chi/chi v4.1.2+incompatible
-<<<<<<< HEAD
-	github.com/google/cel-go v0.5.1
-	github.com/jsternberg/zap-logfmt v1.2.0
-	github.com/klauspost/compress v1.11.0
-	github.com/klauspost/cpuid v1.2.5 // cannot upgrade until arm is fixed: https://github.com/klauspost/cpuid/issues/52
-	github.com/lucas-clemente/quic-go v0.19.0
-	github.com/mholt/acmez v0.1.1
-=======
 	github.com/google/cel-go v0.6.0
 	github.com/klauspost/compress v1.11.3
 	github.com/klauspost/cpuid/v2 v2.0.1
 	github.com/lucas-clemente/quic-go v0.19.3
 	github.com/mholt/acmez v0.1.2
->>>>>>> upstream/master
 	github.com/naoina/go-stringutil v0.1.0 // indirect
 	github.com/naoina/toml v0.1.1
 	github.com/prometheus/client_golang v1.9.0
